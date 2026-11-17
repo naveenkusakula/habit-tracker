@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Streaks — Daily Habit Tracker</title>
+<meta name="description" content="A simple daily habit tracker. Add a habit, mark it done, keep the streak. Free, no account, works offline." />
+<link rel="stylesheet" href="styles.css" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔥</text></svg>" />
+</head>
+<body>
+  <div class="bg" aria-hidden="true">
+    <div class="blob blob-a"></div>
+    <div class="blob blob-b"></div>
+    <div class="blob blob-c"></div>
+  </div>
+
+  <div class="app">
+    <header class="hero">
+      <p class="eyebrow">Daily Habits</p>
+      <h1>Today</h1>
+      <p class="dateline" id="dateline">—</p>
+
+      <div class="glass summary">
+        <div class="summary-main">
+          <span class="summary-big" id="doneCount">0/0</span>
+          <span class="summary-label">done today</span>
+        </div>
+        <div class="summary-side">
+          <div class="bar"><div class="bar-fill" id="barFill"></div></div>
+          <p class="summary-sub" id="summarySub">Add your first habit to get started.</p>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <section class="habit-section" id="doSection">
+        <div class="section-head">
+          <h2>Do today</h2>
+          <span class="pill pill-do" id="doPill">0</span>
+        </div>
+        <div class="cards" id="doCards"></div>
+        <p class="empty" id="doEmpty">Nothing here yet. Tap + and add something you want to do every day.</p>
+      </section>
+
+      <section class="habit-section" id="avoidSection">
+        <div class="section-head">
+          <h2>Don&rsquo;t do</h2>
+          <span class="pill pill-avoid" id="avoidPill">0</span>
+        </div>
+        <div class="cards" id="avoidCards"></div>
+        <p class="empty" id="avoidEmpty">Nothing here yet. Tap + and add something you want to stay away from.</p>
+      </section>
+    </main>
+
+    <footer class="foot">Your habits live only in this browser. No account, no cost.</footer>
+  </div>
+
+  <button class="fab" id="addBtn" aria-label="Add a habit">+</button>
+
+  <div class="backdrop" id="backdrop" hidden>
+    <div class="sheet glass" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+      <h3 id="sheetTitle">New habit</h3>
+
+      <label class="field-label" for="habitName">Name</label>
+      <input id="habitName" type="text" placeholder="e.g. Read 10 pages" maxlength="60" autocomplete="off" />
+
+      <span class="field-label">Type</span>
+      <div class="segmented" id="typeToggle">
+        <button type="button" class="seg active" data-type="do">✓&ensp;Do it</button>
+        <button type="button" class="seg" data-type="avoid">✕&ensp;Don&rsquo;t do it</button>
+      </div>
+
+      <span class="field-label">Category</span>
+      <div class="chips" id="categoryChips"></div>
+
+      <div class="sheet-actions">
+        <button type="button" class="btn ghost" id="cancelBtn">Cancel</button>
+        <button type="button" class="btn primary" id="saveBtn">Add habit</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
