@@ -22,17 +22,11 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import org.json.JSONArray;
-import org.json.JSONObject;
-
 import java.time.LocalDate;
 import java.time.format.TextStyle;
 import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
-import java.util.Set;
 
 /**
  * Streaks — a daily habit tracker that lives entirely on this device.
@@ -85,59 +79,16 @@ public class MainActivity extends Activity {
     /* ---------------- storage ---------------- */
 
     private void load() {
-        habits = new ArrayList<>();
-        try {
-            String raw = getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY, null);
-            if (raw == null) return;
-            JSONArray arr = new JSONArray(raw);
-            LocalDate today = LocalDate.now();
-            for (int i = 0; i < arr.length(); i++) {
-                JSONObject o = arr.optJSONObject(i);
-                if (o == null) continue;
-                Set<String> comp = new HashSet<>();
-                JSONObject co = o.optJSONObject("completions");
-                if (co != null) {
-                    Iterator<String> keys = co.keys();
-                    while (keys.hasNext()) {
-                        String k = keys.next();
-                        if (co.optBoolean(k, false)) comp.add(k);
-                    }
-                }
-                List<String> br = new ArrayList<>();
-                JSONArray ba = o.optJSONArray("breaks");
-                if (ba != null) for (int j = 0; j < ba.length(); j++) br.add(ba.optString(j, ""));
-                StreakLogic.HabitData h = StreakLogic.sanitize(
-                    o.optString("id", ""), o.optString("name", ""), o.optString("type", ""),
-                    o.optString("category", ""), o.optString("createdAt", ""), comp, br, today);
-                if (h != null) habits.add(h);
-            }
-        } catch (Exception e) {
-            habits = new ArrayList<>(); /* corrupted storage -> fresh start */
-        }
+        String raw = getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY, null);
+        habits = HabitStore.fromJson(raw, LocalDate.now());
     }
 
     private void save() {
-        try {
-            JSONArray arr = new JSONArray();
-            for (StreakLogic.HabitData h : habits) {
-                JSONObject o = new JSONObject();
-                o.put("id", h.id);
-                o.put("name", h.name);
-                o.put("type", h.type);
-                o.put("category", h.category);
-                o.put("createdAt", h.createdAt);
-                JSONObject comp = new JSONObject();
-                for (String d : h.completions) comp.put(d, true);
-                o.put("completions", comp);
-                JSONArray br = new JSONArray();
-                for (String d : h.breaks) br.put(d);
-                o.put("breaks", br);
-                arr.put(o);
-            }
-            SharedPreferences.Editor e = getSharedPreferences(PREFS, MODE_PRIVATE).edit();
-            e.putString(KEY, arr.toString());
-            e.apply();
-        } catch (Exception ignored) { /* in-memory state stays intact */ }
+        String json = HabitStore.toJson(habits);
+        if (json == null) return; /* keep in-memory state; try again next change */
+        SharedPreferences.Editor e = getSharedPreferences(PREFS, MODE_PRIVATE).edit();
+        e.putString(KEY, json);
+        e.apply();
     }
 
     /* ---------------- helpers ---------------- */

@@ -30,6 +30,20 @@ javac -encoding UTF-8 -d build/test-classes \
   src/com/naveenkusakula/streaks/StreakLogic.java test/StreakLogicTest.java
 java -cp build/test-classes com.naveenkusakula.streaks.StreakLogicTest
 
+echo "== 1b flow tests (user journeys vs the real storage code) =="
+# Test-only: the standalone org.json jar (same library Android ships).
+# The app itself has zero dependencies; this jar never enters the APK.
+JSONJAR="${JSONJAR:-$HOME/android-tools/test-libs/json.jar}"
+if [ -f "$JSONJAR" ]; then
+  javac -encoding UTF-8 -cp "$JSONJAR" -d build/test-classes \
+    src/com/naveenkusakula/streaks/StreakLogic.java \
+    src/com/naveenkusakula/streaks/HabitStore.java test/FlowTest.java
+  java -cp "build/test-classes:$JSONJAR" com.naveenkusakula.streaks.FlowTest
+else
+  echo "SKIPPED: org.json test jar not found at $JSONJAR"
+  echo "  fetch: https://repo1.maven.org/maven2/org/json/json/20250517/json-20250517.jar"
+fi
+
 echo "== 2/4 APK =="
 "$BT/aapt2" compile --dir res -o build/res.zip
 "$BT/aapt2" link -o build/base.apk -I "$JAR" --manifest AndroidManifest.xml build/res.zip
@@ -52,6 +66,7 @@ rm -rf build/module && mkdir -p build/module/manifest build/module/dex
 (cd build/module && unzip -q ../proto.zip && mv AndroidManifest.xml manifest/ \
   && cp ../dex/classes.dex dex/)
 (cd build/module && zip -q -r ../base-module.zip manifest dex res resources.pb)
+rm -f build/streaks.aab build/streaks.apks
 java -jar "$BUNDLETOOL" build-bundle \
   --modules=build/base-module.zip --output=build/streaks.aab
 jarsigner -keystore signing/streaks.keystore \
