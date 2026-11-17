@@ -2,7 +2,9 @@
    Two kinds of habits:
    - "do":    mark it done each day; the streak counts consecutive done days.
    - "avoid": every clean day grows the streak; tap "Broke it" and it resets.
-   No timers, no accounts — everything is stored in this browser. */
+   No timers, no accounts — everything is stored in this browser.
+   The rules here mirror StreakLogic.java in the Android app exactly;
+   that class carries the unit tests for both. */
 
 "use strict";
 
@@ -12,10 +14,10 @@ const CATEGORIES = [
   { id: "health",  label: "Health",  color: "#34d399" },
   { id: "fitness", label: "Fitness", color: "#fb923c" },
   { id: "mind",    label: "Mind",    color: "#a78bfa" },
-  { id: "work",    label: "Work",    color: "#60a5fa" },
-  { id: "home",    label: "Home",    color: "#fbbf24" },
-  { id: "money",   label: "Money",   color: "#2dd4bf" },
-  { id: "other",   label: "Other",   color: "#e2e8f0" },
+  { id: "work",    label: "Work",    color: "#38bdf8" },
+  { id: "home",    label: "Home",    color: "#facc15" },
+  { id: "money",   label: "Money",   color: "#4ade80" },
+  { id: "other",   label: "Other",   color: "#cbd5e1" },
 ];
 const catById = (id) => CATEGORIES.find((c) => c.id === id) || CATEGORIES[CATEGORIES.length - 1];
 
@@ -30,8 +32,10 @@ function parse(s) {
   return new Date(y, m - 1, d);
 }
 function todayStr() { return fmt(new Date()); }
-function addDays(s, n) { return fmt(new Date(parse(s).getTime() + n * DAY)); }
-function diffDays(a, b) { return Math.round((parse(a) - parse(b)) / DAY); }
+function daysBetween(a, b) { return Math.round((parse(b) - parse(a)) / DAY); }
+function prettyDate(s) {
+  return parse(s).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
 
 /* ---------- state ---------- */
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -47,21 +51,22 @@ function sanitizeHabit(raw) {
   if (!raw || typeof raw !== "object") return null;
   if (raw.type !== "do" && raw.type !== "avoid") return null;
   if (typeof raw.name !== "string" || !raw.name.trim()) return null;
+  const today = todayStr();
   const completions = {};
   if (raw.completions && typeof raw.completions === "object" && !Array.isArray(raw.completions)) {
     for (const k of Object.keys(raw.completions)) {
-      if (isDateStr(k) && raw.completions[k] === true) completions[k] = true;
+      if (isDateStr(k) && k <= today && raw.completions[k] === true) completions[k] = true;
     }
   }
   const breaks = Array.isArray(raw.breaks)
-    ? [...new Set(raw.breaks.filter(isDateStr))].sort()
+    ? [...new Set(raw.breaks.filter((b) => isDateStr(b) && b <= today))].sort()
     : [];
   return {
     id: typeof raw.id === "string" && raw.id ? raw.id : uid(),
     name: raw.name.trim().slice(0, 60),
     type: raw.type,
     category: CATEGORIES.some((c) => c.id === raw.category) ? raw.category : "other",
-    createdAt: isDateStr(raw.createdAt) ? raw.createdAt : todayStr(),
+    createdAt: isDateStr(raw.createdAt) ? raw.createdAt : today,
     completions,
     breaks,
   };
@@ -80,245 +85,325 @@ function load() {
   return { habits: [] };
 }
 function save() {
-  localStorage.setItem(LS_KEY, JSON.stringify(state));
+  try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch (e) { /* storage full/blocked */ }
 }
 function uid() {
-  return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 
-/* ---------- streak math ---------- */
+/* ---------- streak math (mirrors StreakLogic.java) ---------- */
 function doStreak(h) {
+  let cursor = new Date();
+  if (!h.completions[fmt(cursor)]) cursor.setDate(cursor.getDate() - 1);
   let streak = 0;
-  let cursor = todayStr();
-  if (!h.completions[cursor]) cursor = addDays(cursor, -1); // today still open
-  while (h.completions[cursor]) {
+  while (h.completions[fmt(cursor)]) {
     streak++;
-    cursor = addDays(cursor, -1);
+    cursor.setDate(cursor.getDate() - 1);
   }
   return streak;
 }
-function lastBreak(h) {
-  return h.breaks.length ? h.breaks[h.breaks.length - 1] : null;
-}
 function avoidStreak(h) {
-  const base = lastBreak(h) || h.createdAt;
-  return Math.max(0, diffDays(todayStr(), base));
+  const today = todayStr();
+  if (h.breaks.includes(today)) return 0;
+  let anchor = h.createdAt;
+  for (const b of h.breaks) if (b > anchor) anchor = b;
+  return Math.max(0, daysBetween(anchor, today));
 }
-function brokenToday(h) {
-  return lastBreak(h) === todayStr();
+function percent(done, total) {
+  return total <= 0 ? 0 : Math.round((100 * done) / total);
+}
+function conditionText(done, total) {
+  if (total <= 0) return "No habits yet";
+  if (done === 0) return "Nothing yet";
+  if (done === total) return "All clear";
+  const pct = percent(done, total);
+  if (pct >= 60) return "Mostly done";
+  if (pct >= 30) return "Partly done";
+  return "Just starting";
+}
+function trackedCount(dos, ds) {
+  return dos.filter((h) => h.createdAt <= ds).length;
+}
+function dayFraction(dos, ds) {
+  const tracked = dos.filter((h) => h.createdAt <= ds);
+  if (!tracked.length) return 0;
+  return tracked.filter((h) => h.completions[ds]).length / tracked.length;
+}
+
+/* ---------- dom ---------- */
+const $ = (id) => document.getElementById(id);
+const els = {
+  bgClear: $("bgClear"), dateline: $("dateline"),
+  heroNum: $("heroNum"), heroPct: $("heroPct"),
+  cond: $("condText"), sub: $("subLine"),
+  weekSection: $("weekSection"), weekStrip: $("weekStrip"),
+  doList: $("doList"), avoidList: $("avoidList"),
+  doEmpty: $("doEmpty"), avoidEmpty: $("avoidEmpty"),
+  fab: $("fab"), scrim: $("scrim"), sheet: $("sheet"),
+  name: $("nameInput"), typeDo: $("typeDo"), typeAvoid: $("typeAvoid"),
+  catList: $("catList"), cancel: $("cancelBtn"), add: $("addBtn"),
+};
+
+function escapeHTML(s) {
+  return s.replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
 }
 
 /* ---------- rendering ---------- */
-const $ = (id) => document.getElementById(id);
-const doCards = $("doCards"), avoidCards = $("avoidCards");
-
-function weekDots(h) {
-  const t = todayStr();
-  const letters = ["S", "M", "T", "W", "T", "F", "S"];
-  let html = '<div class="week">';
-  for (let i = 6; i >= 0; i--) {
-    const day = addDays(t, -i);
-    const dow = parse(day).getDay();
-    let cls = "wd";
-    if (day < h.createdAt) cls += " pre";
-    else if (h.type === "do") { if (h.completions[day]) cls += " full-do"; }
-    else { if (h.breaks.includes(day)) cls += " broken"; else cls += " full-avoid"; }
-    if (i === 0) cls += " today";
-    html += `<span class="wday"><span class="${cls}"></span><span class="wl">${letters[dow]}</span></span>`;
-  }
-  return html + "</div>";
-}
-
-function cardHTML(h) {
-  const cat = catById(h.category);
-  const del = `<button class="del-btn" data-action="delete" data-id="${h.id}" aria-label="Delete habit">×</button>`;
-  const head = `
-    <div class="card-top">
-      <span class="cat-chip"><span class="dot" style="background:${cat.color}"></span>${cat.label}</span>
-    </div>
-    <div class="card-name">${escapeHTML(h.name)}</div>`;
-
-  if (h.type === "do") {
-    const done = !!h.completions[todayStr()];
-    const streak = doStreak(h);
-    return `
-    <article class="card glass" style="--accent:${cat.color}">
-      ${del}
-      <div class="card-main">
-        ${head}
-        <div class="streak-line"><span class="flame">🔥</span><span class="streak-num">${streak}</span><span class="streak-word">day streak</span></div>
-        ${weekDots(h)}
-      </div>
-      <button class="check-btn ${done ? "done" : ""}" data-action="toggle-do" data-id="${h.id}" aria-label="${done ? "Undo done" : "Mark done"}">
-        <svg viewBox="0 0 24 24" fill="none"><path d="M4 12.5l5 5L20 6.5" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </button>
-    </article>`;
-  }
-
-  const broken = brokenToday(h);
-  const streak = avoidStreak(h);
-  return `
-  <article class="card glass ${broken ? "is-broken" : ""}" style="--accent:${cat.color}">
-    ${del}
-    <div class="card-main">
-      ${head}
-      ${broken
-        ? `<p class="broken-note">Streak broken today — it starts again tomorrow.</p>`
-        : `<div class="streak-line"><span class="flame">🔥</span><span class="streak-num">${streak}</span><span class="streak-word">${streak === 1 ? "day clean" : "days clean"}</span></div>`}
-      ${weekDots(h)}
-    </div>
-    <div class="avoid-actions">
-      ${broken
-        ? `<button class="undo-btn" data-action="undo-break" data-id="${h.id}">Undo</button>`
-        : `<button class="broke-btn" data-action="break" data-id="${h.id}">Broke it</button>`}
-    </div>
-  </article>`;
-}
-
-function escapeHTML(s) {
-  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-}
+let armedBreak = null;   /* habit id whose "Broke it" is waiting for a confirming tap */
+let armedTimer = null;
 
 function render() {
+  const today = todayStr();
+  const now = new Date();
   const dos = state.habits.filter((h) => h.type === "do");
   const avoids = state.habits.filter((h) => h.type === "avoid");
+  const done = dos.filter((h) => h.completions[today]).length;
+  const total = dos.length;
+  const allClear = total > 0 && done === total;
+  let best = 0;
+  for (const h of state.habits) {
+    best = Math.max(best, h.type === "do" ? doStreak(h) : avoidStreak(h));
+  }
 
-  doCards.innerHTML = dos.map(cardHTML).join("");
-  avoidCards.innerHTML = avoids.map(cardHTML).join("");
-  $("doEmpty").style.display = dos.length ? "none" : "block";
-  $("avoidEmpty").style.display = avoids.length ? "none" : "block";
-  $("doPill").textContent = dos.length;
-  $("avoidPill").textContent = avoids.length;
+  els.dateline.textContent = now.toLocaleDateString(undefined, {
+    weekday: "long", month: "long", day: "numeric",
+  });
 
-  const t = new Date();
-  $("dateline").textContent = t.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+  /* hero */
+  els.heroNum.textContent = total === 0 ? "–" : String(percent(done, total));
+  els.heroPct.textContent = total === 0 ? "" : "%";
+  els.cond.textContent = conditionText(done, total);
+  els.sub.textContent = total === 0
+    ? "Add a habit to start your day"
+    : `${done} of ${total} done today` + (best > 0 ? `  ·  🔥 ${best}-day streak` : "");
+  els.bgClear.classList.toggle("on", allClear);
 
-  const doneToday = dos.filter((h) => h.completions[todayStr()]).length;
-  $("doneCount").textContent = `${doneToday}/${dos.length}`;
-  $("barFill").style.width = dos.length ? `${(doneToday / dos.length) * 100}%` : "0%";
+  /* this week */
+  els.weekSection.hidden = dos.length === 0;
+  if (dos.length) {
+    const letters = ["S", "M", "T", "W", "T", "F", "S"];
+    let html = "";
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+      const ds = fmt(d);
+      const tracked = trackedCount(dos, ds);
+      const frac = dayFraction(dos, ds);
+      const alpha = tracked === 0 ? 0 : 0.27 + frac * 0.73;
+      html += `<div class="wcell${i === 0 ? " today" : ""}">
+        <div class="wletter">${letters[d.getDay()]}</div>
+        <div class="wdot" style="background:rgba(255,255,255,${alpha.toFixed(2)});border-color:rgba(255,255,255,${tracked === 0 ? 0.3 : 0})"></div>
+        <div class="wpct">${tracked === 0 ? "–" : Math.round(frac * 100) + "%"}</div>
+      </div>`;
+    }
+    els.weekStrip.innerHTML = html;
+  }
 
-  const clean = avoids.filter((h) => !brokenToday(h)).length;
-  const parts = [];
-  if (dos.length) parts.push(doneToday === dos.length ? "All do-habits done. 🎉" : `${dos.length - doneToday} do-habit${dos.length - doneToday === 1 ? "" : "s"} left today.`);
-  if (avoids.length) parts.push(clean === avoids.length ? "Every clean streak is alive." : `${avoids.length - clean} streak broken today.`);
-  $("summarySub").textContent = parts.length ? parts.join(" ") : "Add your first habit to get started.";
+  /* lists */
+  els.doList.innerHTML = dos.map(doRowHTML).join("");
+  els.avoidList.innerHTML = avoids.map(avoidRowHTML).join("");
+  els.doEmpty.style.display = dos.length ? "none" : "";
+  els.avoidEmpty.style.display = avoids.length ? "none" : "";
 }
 
-/* ---------- actions ---------- */
+function doRowHTML(h) {
+  const today = todayStr();
+  const done = !!h.completions[today];
+  const streak = doStreak(h);
+  const sub = streak > 0
+    ? `🔥 ${streak} ${streak === 1 ? "day" : "days"}`
+    : done ? "Done today" : "Not done yet";
+  return `<div class="hrow do" data-id="${h.id}" role="button" aria-pressed="${done}"
+      aria-label="${escapeHTML(h.name)} — tap to ${done ? "undo" : "mark done"}; long-press to delete">
+    <div class="hmain">
+      <div class="hname">${escapeHTML(h.name)}</div>
+      <div class="hsub">${catById(h.category).label} &middot; ${sub}</div>
+    </div>
+    <button class="check${done ? " done" : ""}" data-check="${h.id}" aria-hidden="true" tabindex="-1">${done ? "✓" : ""}</button>
+  </div>`;
+}
+
+function avoidRowHTML(h) {
+  const today = todayStr();
+  const broke = h.breaks.includes(today);
+  const streak = avoidStreak(h);
+  const armed = armedBreak === h.id;
+  const action = broke
+    ? `<button class="undo-link" data-action="undo" data-id="${h.id}">Undo</button>`
+    : `<button class="broke-link${armed ? " armed" : ""}" data-action="break" data-id="${h.id}">${armed ? "Tap again — reset to 0" : "Broke it"}</button>`;
+  const sub = broke
+    ? `${catById(h.category).label} &middot; Broken today — back to 0`
+    : `${catById(h.category).label} &middot; since ${prettyDate(h.createdAt)}`;
+  return `<div class="hrow" data-id="${h.id}">
+    <div class="hmain">
+      <div class="hname">${escapeHTML(h.name)}</div>
+      <div class="hsub">${sub}</div>
+      ${action}
+    </div>
+    <div>
+      <div class="anum${broke ? " broken" : ""}">${streak}</div>
+      <div class="adays">${streak === 1 ? "DAY" : "DAYS"}</div>
+    </div>
+  </div>`;
+}
+
+/* ---------- interactions ---------- */
 function findHabit(id) { return state.habits.find((h) => h.id === id); }
 
-document.addEventListener("click", (e) => {
-  const btn = e.target.closest("[data-action]");
-  if (!btn) return;
-  const h = findHabit(btn.dataset.id);
+function toggleDo(id) {
+  const h = findHabit(id);
   if (!h) return;
-  const action = btn.dataset.action;
+  const today = todayStr();
+  if (h.completions[today]) delete h.completions[today];
+  else h.completions[today] = true;
+  save();
+  render();
+}
 
-  if (action === "toggle-do") {
-    const t = todayStr();
-    if (h.completions[t]) delete h.completions[t];
-    else h.completions[t] = true;
-    save(); render();
-  }
-
-  if (action === "break") {
-    if (!btn.classList.contains("armed")) {
-      btn.classList.add("armed");
-      btn.textContent = "Tap again to confirm";
-      setTimeout(() => render(), 2600);
-      return;
-    }
-    const t = todayStr();
-    if (!h.breaks.includes(t)) h.breaks.push(t);
+function armBreak(id) {
+  armedBreak = id;
+  render();
+  clearTimeout(armedTimer);
+  armedTimer = setTimeout(() => { armedBreak = null; render(); }, 2600);
+}
+function doBreak(id) {
+  const h = findHabit(id);
+  if (!h) return;
+  const today = todayStr();
+  if (!h.breaks.includes(today)) {
+    h.breaks.push(today);
     h.breaks.sort();
-    save(); render();
   }
+  armedBreak = null;
+  save();
+  render();
+}
+function undoBreak(id) {
+  const h = findHabit(id);
+  if (!h) return;
+  h.breaks = h.breaks.filter((b) => b !== todayStr());
+  save();
+  render();
+}
+function deleteHabit(id) {
+  state.habits = state.habits.filter((h) => h.id !== id);
+  if (armedBreak === id) armedBreak = null;
+  save();
+  render();
+}
 
-  if (action === "undo-break") {
-    h.breaks = h.breaks.filter((d) => d !== todayStr());
-    save(); render();
+/* Row clicks (do-rows toggle; buttons inside avoid-rows act). A long-press
+   on any row offers delete, like the Android app, and swallows the click
+   that follows it. */
+let longPressed = false;
+let pressTimer = null;
+
+function bindRowEvents(listEl) {
+  listEl.addEventListener("pointerdown", (e) => {
+    const row = e.target.closest(".hrow");
+    if (!row || e.target.closest("button")) return;
+    longPressed = false;
+    clearTimeout(pressTimer);
+    pressTimer = setTimeout(() => {
+      longPressed = true;
+      const h = findHabit(row.dataset.id);
+      if (h && confirm(`Delete "${h.name}"? Its streak history will be gone.`)) deleteHabit(h.id);
+    }, 550);
+  });
+  for (const ev of ["pointerup", "pointerleave", "pointercancel"]) {
+    listEl.addEventListener(ev, () => clearTimeout(pressTimer));
   }
-
-  if (action === "delete") {
-    if (!btn.classList.contains("armed")) {
-      btn.classList.add("armed");
-      btn.textContent = "Delete?";
-      setTimeout(() => render(), 2600);
+  listEl.addEventListener("click", (e) => {
+    if (longPressed) { longPressed = false; return; }
+    const actionBtn = e.target.closest("[data-action]");
+    if (actionBtn) {
+      const { action, id } = actionBtn.dataset;
+      if (action === "break") (armedBreak === id ? doBreak : armBreak)(id);
+      else if (action === "undo") undoBreak(id);
       return;
     }
-    state.habits = state.habits.filter((x) => x.id !== h.id);
-    save(); render();
-  }
-});
+    const row = e.target.closest(".hrow.do");
+    if (row) toggleDo(row.dataset.id);
+  });
+  listEl.addEventListener("contextmenu", (e) => {
+    if (e.target.closest(".hrow")) e.preventDefault();
+  });
+}
+bindRowEvents(els.doList);
+bindRowEvents(els.avoidList);
 
 /* ---------- add-habit sheet ---------- */
-const backdrop = $("backdrop");
-const nameInput = $("habitName");
-const saveBtn = $("saveBtn");
-let newType = "do";
-let newCategory = "other";
+let formType = "do";
+let formCategory = "health";
 
-const chipsBox = $("categoryChips");
-chipsBox.innerHTML = CATEGORIES.map((c) =>
-  `<button type="button" class="chip ${c.id === newCategory ? "active" : ""}" data-cat="${c.id}"><span class="dot" style="background:${c.color}"></span>${c.label}</button>`
-).join("");
-chipsBox.addEventListener("click", (e) => {
-  const chip = e.target.closest("[data-cat]");
-  if (!chip) return;
-  newCategory = chip.dataset.cat;
-  chipsBox.querySelectorAll(".chip").forEach((el) => el.classList.toggle("active", el.dataset.cat === newCategory));
-});
-
-$("typeToggle").addEventListener("click", (e) => {
-  const seg = e.target.closest("[data-type]");
-  if (!seg) return;
-  newType = seg.dataset.type;
-  document.querySelectorAll(".seg").forEach((el) => el.classList.toggle("active", el.dataset.type === newType));
-});
-
-function syncSave() { saveBtn.disabled = !nameInput.value.trim(); }
-nameInput.addEventListener("input", syncSave);
-nameInput.addEventListener("keydown", (e) => { if (e.key === "Enter" && nameInput.value.trim()) saveHabit(); });
-
+function buildCatList() {
+  els.catList.innerHTML = CATEGORIES.map((c) => `
+    <button type="button" class="cat-row${c.id === formCategory ? " sel" : ""}" data-cat="${c.id}">
+      <span class="cdot" style="--c:${c.color}"></span>
+      <span class="clabel">${c.label}</span>
+      <span class="cmark">✓</span>
+    </button>`).join("");
+}
+function setFormType(t) {
+  formType = t;
+  els.typeDo.classList.toggle("is-active", t === "do");
+  els.typeAvoid.classList.toggle("is-active", t === "avoid");
+}
 function openSheet() {
-  backdrop.hidden = false;
-  syncSave();
-  setTimeout(() => nameInput.focus(), 60);
+  els.scrim.hidden = false;
+  els.sheet.hidden = false;
+  els.name.value = "";
+  setFormType("do");
+  formCategory = "health";
+  buildCatList();
+  setTimeout(() => els.name.focus(), 60);
 }
 function closeSheet() {
-  backdrop.hidden = true;
-  nameInput.value = "";
+  els.scrim.hidden = true;
+  els.sheet.hidden = true;
 }
-function saveHabit() {
-  const name = nameInput.value.trim();
-  if (!name) return;
-  state.habits.push({
-    id: uid(),
-    name,
-    type: newType,
-    category: newCategory,
-    createdAt: todayStr(),
-    completions: {},
-    breaks: [],
+els.fab.addEventListener("click", openSheet);
+els.cancel.addEventListener("click", closeSheet);
+els.scrim.addEventListener("click", closeSheet);
+els.typeDo.addEventListener("click", () => setFormType("do"));
+els.typeAvoid.addEventListener("click", () => setFormType("avoid"));
+els.catList.addEventListener("click", (e) => {
+  const row = e.target.closest("[data-cat]");
+  if (!row) return;
+  formCategory = row.dataset.cat;
+  buildCatList();
+});
+function submitForm() {
+  const name = els.name.value.trim();
+  if (!name) { els.name.focus(); return; }
+  const h = sanitizeHabit({
+    id: uid(), name, type: formType, category: formCategory,
+    createdAt: todayStr(), completions: {}, breaks: [],
   });
+  if (!h) return;
+  state.habits.push(h);
   save();
   closeSheet();
   render();
 }
+els.add.addEventListener("click", submitForm);
+els.name.addEventListener("keydown", (e) => { if (e.key === "Enter") submitForm(); });
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !els.sheet.hidden) closeSheet();
+});
 
-$("addBtn").addEventListener("click", openSheet);
-$("cancelBtn").addEventListener("click", closeSheet);
-saveBtn.addEventListener("click", saveHabit);
-backdrop.addEventListener("click", (e) => { if (e.target === backdrop) closeSheet(); });
-document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !backdrop.hidden) closeSheet(); });
-
-/* Re-render when the day rolls over while the app is open. */
-let currentDay = todayStr();
+/* Re-render when the day rolls over while the page is open. */
+let renderedDay = todayStr();
 setInterval(() => {
-  if (todayStr() !== currentDay) {
-    currentDay = todayStr();
-    render();
-  }
+  const t = todayStr();
+  if (t !== renderedDay) { renderedDay = t; render(); }
 }, 30000);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) {
+    const t = todayStr();
+    if (t !== renderedDay) { renderedDay = t; render(); }
+  }
+});
 
 render();
