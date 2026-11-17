@@ -4,12 +4,16 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.DialogInterface;
 import android.content.SharedPreferences;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.os.Handler;
 import android.text.InputType;
+import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -31,10 +35,10 @@ import java.util.Locale;
 /**
  * Streaks — a daily habit tracker that lives entirely on this device.
  *
- * Design: modelled directly on the Gradient Weather apps — one full-screen
- * sky gradient, a giant hairline hero number with a "condition" line,
- * content floating on the gradient in simple rows with hairline dividers.
- * No cards, no boxes.
+ * Design: native Material Design 3, the way Google's own apps look —
+ * light surface, white cards with large rounded corners, Google-blue
+ * primary, tonal containers, an extended FAB, segmented buttons and
+ * filter chips in the add dialog.
  *
  * Security design:
  *  - No network code exists in this app, and the manifest declares no
@@ -45,6 +49,8 @@ import java.util.Locale;
  *    Android sandboxes away from every other app.
  *  - All habit rules live in StreakLogic (pure Java, unit-tested); stored
  *    data passes through StreakLogic.sanitize() before it is trusted.
+ *  - The UI itself is exercised by Robolectric tests (android/robolectric)
+ *    that tap through the real flows: add, check, break, undo, delete.
  */
 public class MainActivity extends Activity {
 
@@ -52,22 +58,34 @@ public class MainActivity extends Activity {
     private static final String KEY = "habits_json";
 
     private static final String[][] CATEGORIES = {
-        {"health",  "Health",  "#34d399"},
-        {"fitness", "Fitness", "#fb923c"},
-        {"mind",    "Mind",    "#a78bfa"},
-        {"work",    "Work",    "#38bdf8"},
-        {"home",    "Home",    "#facc15"},
-        {"money",   "Money",   "#4ade80"},
-        {"other",   "Other",   "#cbd5e1"},
+        {"health",  "Health"},
+        {"fitness", "Fitness"},
+        {"mind",    "Mind"},
+        {"work",    "Work"},
+        {"home",    "Home"},
+        {"money",   "Money"},
+        {"other",   "Other"},
     };
 
-    private static final int W = Color.WHITE;
-    private static final int W70 = 0xB3FFFFFF;
-    private static final int W60 = 0x99FFFFFF;
-    private static final int W55 = 0x8CFFFFFF;
-    private static final int W45 = 0x73FFFFFF;
-    private static final int ROSE_TEXT = 0xFFFFC7D1;
-    private static final int ROSE_NUM = 0xFFFDA4AF;
+    /* Material 3 light scheme (Google apps palette) */
+    private static final int SURFACE = 0xFFF8FAFD;
+    private static final int CARD = Color.WHITE;
+    private static final int OUTLINE = 0xFFDDE3EA;
+    private static final int HAIR = 0xFFE7EAEE;
+    private static final int PRIMARY = 0xFF0B57D0;
+    private static final int ON_PRIMARY = Color.WHITE;
+    private static final int PRIMARY_CONTAINER = 0xFFD3E3FD;
+    private static final int ON_PRIMARY_CONTAINER = 0xFF041E49;
+    private static final int SECONDARY_CONTAINER = 0xFFC2E7FF;
+    private static final int ON_SECONDARY_CONTAINER = 0xFF001D35;
+    private static final int ERROR = 0xFFB3261E;
+    private static final int ERROR_CONTAINER = 0xFFF9DEDC;
+    private static final int ON_ERROR_CONTAINER = 0xFF410E0B;
+    private static final int ON_SURFACE = 0xFF1F1F1F;
+    private static final int VARIANT = 0xFF444746;
+    private static final int OUTLINE_VAR = 0xFF747775;
+    private static final int FIELD_BG = 0xFFE9EEF6;
+    private static final int RING_TRACK = 0xFFE7EAEE;
 
     private List<StreakLogic.HabitData> habits = new ArrayList<>();
     private FrameLayout root;
@@ -75,6 +93,7 @@ public class MainActivity extends Activity {
     private final Handler handler = new Handler();
     private String lastRenderedDay = "";
     private String armedBreakId = null;
+    private long armSeq = 0; /* token so a stale disarm timer can't clear a newer arm */
 
     /* ---------------- storage ---------------- */
 
@@ -104,20 +123,10 @@ public class MainActivity extends Activity {
         return t;
     }
 
-    private TextView sectionLabel(String text) {
-        TextView t = tv(text, 12, 0xA6FFFFFF);
-        t.setTypeface(Typeface.DEFAULT_BOLD);
-        t.setLetterSpacing(0.22f);
+    private TextView medium(String text, float sp, int color) {
+        TextView t = tv(text, sp, color);
+        t.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         return t;
-    }
-
-    private View hairline() {
-        View v = new View(this);
-        v.setBackgroundColor(0x33FFFFFF);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, 1);
-        v.setLayoutParams(lp);
-        return v;
     }
 
     private LinearLayout.LayoutParams wrap() {
@@ -131,14 +140,42 @@ public class MainActivity extends Activity {
         return p;
     }
 
+    private GradientDrawable rounded(int color, float radiusDp) {
+        GradientDrawable g = new GradientDrawable();
+        g.setShape(GradientDrawable.RECTANGLE);
+        g.setCornerRadius(dp(radiusDp));
+        g.setColor(color);
+        return g;
+    }
+
+    private LinearLayout card(float radiusDp) {
+        LinearLayout c = new LinearLayout(this);
+        c.setOrientation(LinearLayout.VERTICAL);
+        GradientDrawable bg = rounded(CARD, radiusDp);
+        bg.setStroke(dp(1), OUTLINE);
+        c.setBackground(bg);
+        c.setElevation(dp(1));
+        return c;
+    }
+
+    private View hairline() {
+        View v = new View(this);
+        v.setBackgroundColor(HAIR);
+        v.setLayoutParams(new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(1)));
+        return v;
+    }
+
+    private void ripple(View v) {
+        TypedValue out = new TypedValue();
+        if (getTheme().resolveAttribute(android.R.attr.selectableItemBackground, out, true)) {
+            v.setBackgroundResource(out.resourceId);
+        }
+    }
+
     private String catLabel(String id) {
         for (String[] c : CATEGORIES) if (c[0].equals(id)) return c[1];
         return "Other";
-    }
-
-    private int catColor(String id) {
-        for (String[] c : CATEGORIES) if (c[0].equals(id)) return Color.parseColor(c[2]);
-        return Color.parseColor("#cbd5e1");
     }
 
     private String prettyDate(String iso) {
@@ -146,15 +183,6 @@ public class MainActivity extends Activity {
             LocalDate d = LocalDate.parse(iso, StreakLogic.ISO);
             return d.getMonth().getDisplayName(TextStyle.SHORT, Locale.getDefault()) + " " + d.getDayOfMonth();
         } catch (RuntimeException e) { return iso; }
-    }
-
-    /* The sky. Two states, like the weather apps: the everyday gradient,
-       and a warmer golden one when the day is fully done ("all clear"). */
-    private GradientDrawable sky(boolean allClear) {
-        return new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-            allClear
-                ? new int[]{0xFF2E6BD8, 0xFF2FA3A0, 0xFF8FBF7F, 0xFFF0C169, 0xFFF78D6B}
-                : new int[]{0xFF2B4ACB, 0xFF5B4BC4, 0xFF8A55C0, 0xFFC65D8F, 0xFFF2A56B});
     }
 
     /* ---------------- lifecycle ---------------- */
@@ -191,44 +219,42 @@ public class MainActivity extends Activity {
 
     private void buildUi() {
         Window w = getWindow();
-        w.setStatusBarColor(Color.TRANSPARENT);
-        getWindow().getDecorView().setSystemUiVisibility(
-            View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN);
+        w.setStatusBarColor(SURFACE);
+        w.setNavigationBarColor(SURFACE);
+        w.getDecorView().setSystemUiVisibility(
+            View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
 
         root = new FrameLayout(this);
+        root.setBackgroundColor(SURFACE);
 
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
         content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
-        content.setPadding(dp(26), dp(64), dp(26), dp(120));
+        content.setPadding(dp(20), dp(20), dp(20), dp(120));
         scroll.addView(content);
         root.addView(scroll, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        /* Bottom-centre pill, the one control — like the weather apps' bar. */
-        Button add = new Button(this);
-        add.setText("+  Add habit");
-        add.setTextSize(15);
-        add.setTextColor(Color.WHITE);
-        add.setTypeface(Typeface.DEFAULT_BOLD);
-        add.setAllCaps(false);
-        add.setMinHeight(0); add.setMinWidth(0);
-        add.setPadding(dp(24), dp(13), dp(24), dp(13));
-        GradientDrawable pill = new GradientDrawable();
-        pill.setShape(GradientDrawable.RECTANGLE);
-        pill.setCornerRadius(dp(30));
-        pill.setColor(0x8C14102E);
-        pill.setStroke(dp(1), 0x40FFFFFF);
-        add.setBackground(pill);
-        add.setElevation(dp(8));
-        FrameLayout.LayoutParams addLp = new FrameLayout.LayoutParams(
+        /* Extended FAB, bottom-right — the Material way to add. */
+        Button fab = new Button(this);
+        fab.setText("+  New habit");
+        fab.setTextSize(15);
+        fab.setTextColor(ON_PRIMARY_CONTAINER);
+        fab.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        fab.setAllCaps(false);
+        fab.setMinHeight(0); fab.setMinWidth(0);
+        fab.setPadding(dp(20), dp(14), dp(20), dp(14));
+        fab.setBackground(rounded(PRIMARY_CONTAINER, 16));
+        fab.setElevation(dp(6));
+        FrameLayout.LayoutParams fabLp = new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        addLp.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
-        addLp.bottomMargin = dp(28);
-        add.setLayoutParams(addLp);
-        add.setOnClickListener(v -> showAddDialog());
-        root.addView(add);
+        fabLp.gravity = Gravity.BOTTOM | Gravity.END;
+        fabLp.rightMargin = dp(24);
+        fabLp.bottomMargin = dp(24);
+        fab.setLayoutParams(fabLp);
+        fab.setOnClickListener(v -> showAddDialog());
+        root.addView(fab);
 
         setContentView(root);
     }
@@ -239,7 +265,12 @@ public class MainActivity extends Activity {
         LocalDate today = LocalDate.now();
         String todayS = StreakLogic.fmt(today);
         lastRenderedDay = todayS;
-        armedBreakId = null;
+        /* NOTE: armedBreakId must NOT be cleared here. It used to be, which
+           silently broke the Don't-do flow: the first tap on "Broke it"
+           armed the button and immediately called render(), which wiped
+           the armed state before the row was rebuilt — so the confirming
+           second tap could never happen. It is cleared explicitly where a
+           break is recorded, undone, or timed out (see avoidRow). */
         content.removeAllViews();
 
         List<StreakLogic.HabitData> dos = new ArrayList<>(), avoids = new ArrayList<>();
@@ -247,7 +278,6 @@ public class MainActivity extends Activity {
         int done = 0;
         for (StreakLogic.HabitData h : dos) if (h.completions.contains(todayS)) done++;
         int total = dos.size();
-        boolean allClear = total > 0 && done == total;
         int best = 0;
         for (StreakLogic.HabitData h : habits) {
             best = Math.max(best, h.type.equals("do")
@@ -255,120 +285,154 @@ public class MainActivity extends Activity {
                 : StreakLogic.avoidStreak(h.createdAt, h.breaks, today));
         }
 
-        root.setBackground(sky(allClear));
-        getWindow().setNavigationBarColor(allClear ? 0xFFE57A52 : 0xFFE08A54);
-
-        /* brand + date, centred like a weather app's location line */
-        TextView brand = tv("S T R E A K S", 14, 0xE6FFFFFF);
-        brand.setTypeface(Typeface.DEFAULT_BOLD);
-        brand.setGravity(Gravity.CENTER);
-        content.addView(brand);
-
+        /* app bar: title + date, left-aligned like Google apps */
+        content.addView(tv("Streaks", 22, ON_SURFACE));
         String dateLine = today.getDayOfWeek().getDisplayName(TextStyle.FULL, Locale.getDefault())
             + ", " + today.getMonth().getDisplayName(TextStyle.FULL, Locale.getDefault())
             + " " + today.getDayOfMonth();
-        TextView dateTv = tv(dateLine, 15, W70);
-        dateTv.setGravity(Gravity.CENTER);
+        TextView dateTv = tv(dateLine, 14, VARIANT);
         LinearLayout.LayoutParams dLp = wrap();
-        dLp.topMargin = dp(6);
-        dLp.gravity = Gravity.CENTER_HORIZONTAL;
+        dLp.topMargin = dp(4);
         dateTv.setLayoutParams(dLp);
         content.addView(dateTv);
 
-        /* hero: the giant number, the "condition", the feels-like line */
-        LinearLayout hero = new LinearLayout(this);
-        hero.setOrientation(LinearLayout.HORIZONTAL);
-        hero.setGravity(Gravity.CENTER_HORIZONTAL | Gravity.TOP);
-        LinearLayout.LayoutParams hLp = wrap();
-        hLp.topMargin = dp(26);
-        hLp.gravity = Gravity.CENTER_HORIZONTAL;
-        hero.setLayoutParams(hLp);
-        TextView num = tv(total == 0 ? "–" : String.valueOf(StreakLogic.percent(done, total)), 118, W);
-        num.setTypeface(Typeface.create("sans-serif-light", Typeface.NORMAL));
-        num.setShadowLayer(dp(8), 0, dp(3), 0x26000000);
-        hero.addView(num);
-        if (total > 0) {
-            TextView pct = tv("%", 42, W);
-            pct.setTypeface(Typeface.create("sans-serif-light", Typeface.NORMAL));
-            LinearLayout.LayoutParams pLp = wrap();
-            pLp.topMargin = dp(16);
-            pct.setLayoutParams(pLp);
-            hero.addView(pct);
+        /* hero card: progress ring + today's condition */
+        LinearLayout hero = card(28);
+        LinearLayout.LayoutParams heroLp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        heroLp.topMargin = dp(20);
+        hero.setLayoutParams(heroLp);
+        hero.setPadding(dp(20), dp(20), dp(20), dp(20));
+
+        LinearLayout heroTop = new LinearLayout(this);
+        heroTop.setOrientation(LinearLayout.HORIZONTAL);
+        heroTop.setGravity(Gravity.CENTER_VERTICAL);
+
+        int pct = total == 0 ? 0 : StreakLogic.percent(done, total);
+        FrameLayout ringBox = new FrameLayout(this);
+        LinearLayout.LayoutParams rbLp = new LinearLayout.LayoutParams(dp(104), dp(104));
+        ringBox.setLayoutParams(rbLp);
+        ringBox.addView(new RingView(pct), new FrameLayout.LayoutParams(dp(104), dp(104)));
+        TextView pctTv = tv(total == 0 ? "–" : pct + "%", 26, ON_SURFACE);
+        pctTv.setGravity(Gravity.CENTER);
+        ringBox.addView(pctTv, new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        heroTop.addView(ringBox);
+
+        LinearLayout heroTexts = new LinearLayout(this);
+        heroTexts.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams htLp = wrapW(1);
+        htLp.leftMargin = dp(20);
+        heroTexts.setLayoutParams(htLp);
+        heroTexts.addView(medium(StreakLogic.conditionText(done, total), 20, ON_SURFACE));
+        TextView heroSub = tv(total == 0
+            ? "Add a habit to start your day"
+            : done + " of " + total + " done today", 14, VARIANT);
+        LinearLayout.LayoutParams hsLp = wrap();
+        hsLp.topMargin = dp(6);
+        heroSub.setLayoutParams(hsLp);
+        heroTexts.addView(heroSub);
+        if (best > 0) {
+            TextView bestTv = tv("Best streak · " + best + (best == 1 ? " day" : " days"), 14, VARIANT);
+            LinearLayout.LayoutParams bLp = wrap();
+            bLp.topMargin = dp(3);
+            bestTv.setLayoutParams(bLp);
+            heroTexts.addView(bestTv);
+        }
+        heroTop.addView(heroTexts);
+        hero.addView(heroTop);
+
+        if (!dos.isEmpty()) {
+            View div = hairline();
+            LinearLayout.LayoutParams divLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(1));
+            divLp.topMargin = dp(18);
+            divLp.bottomMargin = dp(14);
+            div.setLayoutParams(divLp);
+            hero.addView(div);
+            TextView weekLabel = medium("This week", 14, ON_SURFACE);
+            hero.addView(weekLabel);
+            hero.addView(weekStrip(dos, today));
         }
         content.addView(hero);
 
-        TextView cond = tv(StreakLogic.conditionText(done, total), 25, W);
-        cond.setGravity(Gravity.CENTER);
-        cond.setShadowLayer(dp(6), 0, dp(2), 0x26000000);
-        LinearLayout.LayoutParams cLp = wrap();
-        cLp.topMargin = dp(2);
-        cLp.gravity = Gravity.CENTER_HORIZONTAL;
-        cond.setLayoutParams(cLp);
-        content.addView(cond);
-
-        String sub = total == 0
-            ? "Add a habit to start your day"
-            : done + " of " + total + " done today" + (best > 0 ? "  ·  🔥 " + best + "-day streak" : "");
-        TextView subTv = tv(sub, 15, W70);
-        subTv.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams sLp = wrap();
-        sLp.topMargin = dp(7);
-        sLp.gravity = Gravity.CENTER_HORIZONTAL;
-        subTv.setLayoutParams(sLp);
-        content.addView(subTv);
-
-        /* this week — the hourly-strip analog */
-        if (!dos.isEmpty()) {
-            addSectionGap(34);
-            content.addView(hairline());
-            addSectionGap(18);
-            content.addView(sectionLabel("THIS WEEK"));
-            content.addView(weekStrip(dos, today));
-        }
-
-        /* do today — the daily-forecast analog: plain rows, hairlines */
-        addSectionGap(30);
-        content.addView(hairline());
-        addSectionGap(18);
-        content.addView(sectionLabel("DO TODAY"));
+        /* do today */
+        content.addView(sectionTitle("Do today"));
         if (dos.isEmpty()) {
             content.addView(emptyLine("Nothing here yet — your first habit is one tap away."));
         } else {
-            for (StreakLogic.HabitData h : dos) content.addView(doRow(h, today));
+            LinearLayout card = card(24);
+            for (int i = 0; i < dos.size(); i++) {
+                if (i > 0) card.addView(hairline());
+                card.addView(doRow(dos.get(i), today));
+            }
+            content.addView(card);
         }
 
-        addSectionGap(26);
-        content.addView(hairline());
-        addSectionGap(18);
-        content.addView(sectionLabel("DON'T DO"));
+        /* don't do */
+        content.addView(sectionTitle("Don't do"));
         if (avoids.isEmpty()) {
             content.addView(emptyLine("Nothing here yet — add something you're quitting."));
         } else {
-            for (StreakLogic.HabitData h : avoids) content.addView(avoidRow(h, today));
+            LinearLayout card = card(24);
+            for (int i = 0; i < avoids.size(); i++) {
+                if (i > 0) card.addView(hairline());
+                card.addView(avoidRow(avoids.get(i), today));
+            }
+            content.addView(card);
         }
 
-        TextView footer = tv("Your data never leaves this phone.", 12, W45);
+        TextView footer = tv("Your data never leaves this phone.", 12, VARIANT);
         footer.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams fLp = wrap();
-        fLp.topMargin = dp(34);
+        fLp.topMargin = dp(28);
         fLp.gravity = Gravity.CENTER_HORIZONTAL;
         footer.setLayoutParams(fLp);
         content.addView(footer);
     }
 
-    private void addSectionGap(int dpVal) {
-        View gap = new View(this);
-        gap.setLayoutParams(new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, dp(dpVal)));
-        content.addView(gap);
+    private TextView sectionTitle(String text) {
+        TextView t = medium(text, 16, ON_SURFACE);
+        LinearLayout.LayoutParams lp = wrap();
+        lp.topMargin = dp(26);
+        lp.leftMargin = dp(4);
+        lp.bottomMargin = dp(10);
+        t.setLayoutParams(lp);
+        return t;
     }
 
     private TextView emptyLine(String text) {
-        TextView t = tv(text, 14.5f, W55);
+        TextView t = tv(text, 14, VARIANT);
         LinearLayout.LayoutParams lp = wrap();
-        lp.topMargin = dp(12);
+        lp.leftMargin = dp(4);
         t.setLayoutParams(lp);
         return t;
+    }
+
+    /** Google Fit-style progress ring. */
+    private final class RingView extends View {
+        private final Paint trackPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint ringPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final int pct;
+
+        RingView(int pct) {
+            super(MainActivity.this);
+            this.pct = pct;
+            trackPaint.setStyle(Paint.Style.STROKE);
+            trackPaint.setStrokeWidth(dp(10));
+            trackPaint.setColor(RING_TRACK);
+            ringPaint.setStyle(Paint.Style.STROKE);
+            ringPaint.setStrokeWidth(dp(10));
+            ringPaint.setStrokeCap(Paint.Cap.ROUND);
+            ringPaint.setColor(PRIMARY);
+        }
+
+        @Override protected void onDraw(Canvas canvas) {
+            float pad = dp(6);
+            RectF r = new RectF(pad, pad, getWidth() - pad, getHeight() - pad);
+            canvas.drawArc(r, 0, 360, false, trackPaint);
+            if (pct > 0) canvas.drawArc(r, -90, pct * 3.6f, false, ringPaint);
+        }
     }
 
     private LinearLayout weekStrip(List<StreakLogic.HabitData> dos, LocalDate today) {
@@ -376,7 +440,7 @@ public class MainActivity extends Activity {
         strip.setOrientation(LinearLayout.HORIZONTAL);
         LinearLayout.LayoutParams sLp = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        sLp.topMargin = dp(14);
+        sLp.topMargin = dp(12);
         strip.setLayoutParams(sLp);
         String letters = "MTWTFSS";
         for (int i = 6; i >= 0; i--) {
@@ -391,7 +455,7 @@ public class MainActivity extends Activity {
             cell.setLayoutParams(wrapW(1));
 
             TextView letter = tv(String.valueOf(letters.charAt(day.getDayOfWeek().getValue() - 1)),
-                12, isToday ? W : W70);
+                12, isToday ? ON_SURFACE : VARIANT);
             if (isToday) letter.setTypeface(Typeface.DEFAULT_BOLD);
             cell.addView(letter);
 
@@ -400,10 +464,10 @@ public class MainActivity extends Activity {
             dotBg.setShape(GradientDrawable.OVAL);
             if (tracked == 0) {
                 dotBg.setColor(0x00000000);
-                dotBg.setStroke(dp(1), 0x4DFFFFFF);
+                dotBg.setStroke(dp(1), OUTLINE_VAR);
             } else {
-                int alpha = 70 + (int) Math.round(frac * 185);
-                dotBg.setColor((alpha << 24) | 0xFFFFFF);
+                int alpha = 60 + (int) Math.round(frac * 195);
+                dotBg.setColor((alpha << 24) | (PRIMARY & 0x00FFFFFF));
             }
             dot.setBackground(dotBg);
             LinearLayout.LayoutParams dotLp = new LinearLayout.LayoutParams(dp(11), dp(11));
@@ -411,8 +475,8 @@ public class MainActivity extends Activity {
             dot.setLayoutParams(dotLp);
             cell.addView(dot);
 
-            TextView pct = tv(tracked == 0 ? "–" : StreakLogic.percent(
-                (int) Math.round(frac * tracked), tracked) + "%", 11, isToday ? W : W60);
+            TextView pct = tv(tracked == 0 ? "–" : Math.round(frac * 100) + "%",
+                11, isToday ? ON_SURFACE : VARIANT);
             LinearLayout.LayoutParams pctLp = wrap();
             pctLp.topMargin = dp(6);
             pct.setLayoutParams(pctLp);
@@ -428,58 +492,46 @@ public class MainActivity extends Activity {
         int streak = StreakLogic.doStreak(h.completions, today);
 
         LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.VERTICAL);
-        LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        row.setLayoutParams(rowLp);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(16), dp(14), dp(16), dp(14));
+        ripple(row);
 
-        LinearLayout main = new LinearLayout(this);
-        main.setOrientation(LinearLayout.HORIZONTAL);
-        main.setGravity(Gravity.CENTER_VERTICAL);
-        main.setPadding(0, dp(13), 0, dp(13));
+        TextView check = tv(done ? "✓" : "", 15, ON_PRIMARY);
+        check.setGravity(Gravity.CENTER);
+        check.setTypeface(Typeface.DEFAULT_BOLD);
+        GradientDrawable cg = new GradientDrawable();
+        cg.setShape(GradientDrawable.OVAL);
+        if (done) cg.setColor(PRIMARY);
+        else { cg.setColor(0x00000000); cg.setStroke(dp(2), OUTLINE_VAR); }
+        check.setBackground(cg);
+        LinearLayout.LayoutParams cgLp = new LinearLayout.LayoutParams(dp(28), dp(28));
+        cgLp.rightMargin = dp(16);
+        check.setLayoutParams(cgLp);
+        row.addView(check);
 
         LinearLayout texts = new LinearLayout(this);
         texts.setOrientation(LinearLayout.VERTICAL);
         texts.setLayoutParams(wrapW(1));
-        texts.addView(tv(h.name, 18, W));
+        texts.addView(tv(h.name, 16, ON_SURFACE));
         String sub = catLabel(h.category)
-            + (streak > 0 ? "  ·  🔥 " + streak + (streak == 1 ? " day" : " days")
-               : done ? "  ·  Done today" : "  ·  Not done yet");
-        TextView subTv = tv(sub, 12.5f, W60);
+            + (streak > 0 ? " · " + streak + " day streak"
+               : done ? " · Done today" : " · Not done yet");
+        TextView subTv = tv(sub, 13, VARIANT);
         LinearLayout.LayoutParams subLp = wrap();
         subLp.topMargin = dp(3);
         subTv.setLayoutParams(subLp);
         texts.addView(subTv);
-        main.addView(texts);
+        row.addView(texts);
 
-        Button check = new Button(this);
-        check.setText(done ? "✓" : "");
-        check.setTextSize(20);
-        check.setTextColor(0xFF6D4FC2);
-        check.setTypeface(Typeface.DEFAULT_BOLD);
-        check.setAllCaps(false);
-        check.setMinHeight(0); check.setMinWidth(0);
-        check.setPadding(0, 0, 0, 0);
-        GradientDrawable cg = new GradientDrawable();
-        cg.setShape(GradientDrawable.OVAL);
-        if (done) cg.setColor(W);
-        else { cg.setColor(0x00000000); cg.setStroke(dp(1.5f), 0xCCFFFFFF); }
-        check.setBackground(cg);
-        LinearLayout.LayoutParams cgLp = new LinearLayout.LayoutParams(dp(46), dp(46));
-        cgLp.leftMargin = dp(14);
-        check.setLayoutParams(cgLp);
         View.OnClickListener toggle = v -> {
             if (done) h.completions.remove(todayS); else h.completions.add(todayS);
             save();
             render();
         };
         check.setOnClickListener(toggle);
-        main.addView(check);
-        row.addView(main);
         row.setOnClickListener(toggle);
         row.setOnLongClickListener(v -> { confirmDelete(h); return true; });
-
-        row.addView(hairline());
         return row;
     }
 
@@ -489,83 +541,91 @@ public class MainActivity extends Activity {
         final int streak = StreakLogic.avoidStreak(h.createdAt, h.breaks, today);
 
         LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.VERTICAL);
-
-        LinearLayout main = new LinearLayout(this);
-        main.setOrientation(LinearLayout.HORIZONTAL);
-        main.setGravity(Gravity.CENTER_VERTICAL);
-        main.setPadding(0, dp(13), 0, dp(13));
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(16), dp(14), dp(16), dp(14));
 
         LinearLayout texts = new LinearLayout(this);
         texts.setOrientation(LinearLayout.VERTICAL);
         texts.setLayoutParams(wrapW(1));
-        texts.addView(tv(h.name, 18, W));
+        texts.addView(tv(h.name, 16, ON_SURFACE));
         TextView subTv = tv(broke
-            ? catLabel(h.category) + "  ·  Broken today — back to 0"
-            : catLabel(h.category) + "  ·  since " + prettyDate(h.createdAt), 12.5f, W60);
+            ? catLabel(h.category) + " · Broken today — back to 0"
+            : catLabel(h.category) + " · since " + prettyDate(h.createdAt), 13, broke ? ERROR : VARIANT);
         LinearLayout.LayoutParams subLp = wrap();
         subLp.topMargin = dp(3);
         subTv.setLayoutParams(subLp);
         texts.addView(subTv);
 
         final boolean armed = h.id.equals(armedBreakId);
-        TextView action = tv(broke ? "Undo" : armed ? "Tap again — reset to 0" : "Broke it",
-            14, broke ? W : ROSE_TEXT);
-        if (armed) action.setTypeface(Typeface.DEFAULT_BOLD);
-        action.setPadding(0, dp(8), dp(4), dp(2));
+        TextView action = medium(broke ? "Undo" : armed ? "Tap again — reset to 0" : "Broke it",
+            14, broke ? PRIMARY : armed ? ON_ERROR_CONTAINER : ERROR);
+        if (armed) {
+            action.setBackground(rounded(ERROR_CONTAINER, 20));
+            action.setPadding(dp(12), dp(7), dp(12), dp(7));
+        } else {
+            action.setPadding(0, dp(8), dp(4), dp(2));
+            ripple(action);
+        }
         action.setOnClickListener(v -> {
             if (broke) {
                 h.breaks.remove(todayS);
+                armedBreakId = null;
                 save();
                 render();
             } else if (armed) {
                 if (!h.breaks.contains(todayS)) h.breaks.add(todayS);
                 java.util.Collections.sort(h.breaks);
+                armedBreakId = null;
                 save();
                 render();
             } else {
                 armedBreakId = h.id;
+                final long seq = ++armSeq;
                 render();
-                handler.postDelayed(this::render, 2600);
+                handler.postDelayed(() -> {
+                    if (armSeq == seq) { armedBreakId = null; render(); }
+                }, 2600);
             }
         });
+        LinearLayout.LayoutParams actLp = wrap();
+        actLp.topMargin = dp(6);
+        action.setLayoutParams(actLp);
         texts.addView(action);
-        main.addView(texts);
+        row.addView(texts);
 
         LinearLayout numCol = new LinearLayout(this);
         numCol.setOrientation(LinearLayout.VERTICAL);
         numCol.setGravity(Gravity.CENTER_HORIZONTAL);
         LinearLayout.LayoutParams ncLp = wrap();
-        ncLp.leftMargin = dp(14);
+        ncLp.leftMargin = dp(16);
         numCol.setLayoutParams(ncLp);
-        TextView num = tv(String.valueOf(streak), 32, broke ? ROSE_NUM : W);
-        num.setTypeface(Typeface.create("sans-serif-light", Typeface.NORMAL));
-        numCol.addView(num);
-        TextView daysLabel = tv(streak == 1 ? "DAY" : "DAYS", 9.5f, W60);
-        daysLabel.setLetterSpacing(0.14f);
+        numCol.addView(tv(String.valueOf(streak), 26, broke ? ERROR : ON_SURFACE));
+        TextView daysLabel = tv(streak == 1 ? "day" : "days", 11, VARIANT);
+        LinearLayout.LayoutParams dlLp = wrap();
+        dlLp.topMargin = dp(2);
+        daysLabel.setLayoutParams(dlLp);
         numCol.addView(daysLabel);
-        main.addView(numCol);
+        row.addView(numCol);
 
-        row.addView(main);
         row.setOnLongClickListener(v -> { confirmDelete(h); return true; });
-        row.addView(hairline());
         return row;
     }
 
     /* ---------------- dialogs ---------------- */
 
-    private void styleDialog(AlertDialog dialog) {
+    /** Material dialog surface: white, 28dp corners, tonal buttons. */
+    private void styleDialog(AlertDialog dialog, boolean destructivePositive) {
         Window dw = dialog.getWindow();
-        if (dw != null) {
-            GradientDrawable bg = sky(false);
-            bg.setCornerRadius(dp(26));
-            bg.setStroke(dp(1), 0x40FFFFFF);
-            dw.setBackgroundDrawable(bg);
-        }
+        if (dw != null) dw.setBackgroundDrawable(rounded(CARD, 28));
         Button pos = dialog.getButton(DialogInterface.BUTTON_POSITIVE);
-        if (pos != null) { pos.setTextColor(W); pos.setTypeface(Typeface.DEFAULT_BOLD); }
+        if (pos != null) {
+            pos.setTextColor(destructivePositive ? ERROR : PRIMARY);
+            pos.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+            pos.setAllCaps(false);
+        }
         Button neg = dialog.getButton(DialogInterface.BUTTON_NEGATIVE);
-        if (neg != null) neg.setTextColor(W70);
+        if (neg != null) { neg.setTextColor(VARIANT); neg.setAllCaps(false); }
     }
 
     private void confirmDelete(final StreakLogic.HabitData h) {
@@ -575,11 +635,12 @@ public class MainActivity extends Activity {
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Delete", (d, which) -> {
                 habits.remove(h);
+                if (h.id.equals(armedBreakId)) armedBreakId = null;
                 save();
                 render();
             })
             .create();
-        dialog.setOnShowListener(d -> styleDialog(dialog));
+        dialog.setOnShowListener(d -> styleDialog(dialog, true));
         dialog.show();
     }
 
@@ -589,84 +650,83 @@ public class MainActivity extends Activity {
 
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(24), dp(24), dp(24), dp(8));
+        box.setPadding(dp(24), dp(24), dp(24), dp(10));
 
-        TextView heading = tv("New habit", 21, W);
-        heading.setTypeface(Typeface.DEFAULT_BOLD);
+        TextView heading = tv("New habit", 22, ON_SURFACE);
         box.addView(heading);
 
         final EditText name = new EditText(this);
         name.setHint("e.g. Read 10 pages");
-        name.setHintTextColor(W45);
-        name.setTextColor(W);
-        name.setTextSize(17);
+        name.setHintTextColor(VARIANT);
+        name.setTextColor(ON_SURFACE);
+        name.setTextSize(16);
         name.setSingleLine(true);
         name.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
-        name.setBackgroundColor(Color.TRANSPARENT);
-        name.setPadding(0, dp(10), 0, dp(10));
+        name.setBackground(rounded(FIELD_BG, 12));
+        name.setPadding(dp(14), dp(12), dp(14), dp(12));
         LinearLayout.LayoutParams nameLp = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        nameLp.topMargin = dp(14);
+        nameLp.topMargin = dp(18);
         name.setLayoutParams(nameLp);
         box.addView(name);
-        box.addView(hairline());
 
-        TextView typeLabel = sectionLabel("TYPE");
+        TextView typeLabel = medium("Type", 14, ON_SURFACE);
         LinearLayout.LayoutParams tlLp = wrap();
-        tlLp.topMargin = dp(22); tlLp.bottomMargin = dp(10);
+        tlLp.topMargin = dp(22); tlLp.bottomMargin = dp(8);
         typeLabel.setLayoutParams(tlLp);
         box.addView(typeLabel);
 
-        LinearLayout segRow = new LinearLayout(this);
-        segRow.setOrientation(LinearLayout.HORIZONTAL);
-        final LinearLayout doOpt = typeOption("✓  Do it");
-        final LinearLayout avoidOpt = typeOption("✕  Don't do it");
-        segRow.addView(doOpt);
-        segRow.addView(avoidOpt);
-        box.addView(segRow);
+        /* Material segmented button: one outlined pill, two segments. */
+        LinearLayout seg = new LinearLayout(this);
+        seg.setOrientation(LinearLayout.HORIZONTAL);
+        GradientDrawable segBg = rounded(0x00000000, 20);
+        segBg.setStroke(dp(1), OUTLINE_VAR);
+        seg.setBackground(segBg);
+        final TextView doOpt = segment("Do it");
+        final TextView avoidOpt = segment("Don't do it");
+        seg.addView(doOpt);
+        seg.addView(avoidOpt);
+        box.addView(seg);
 
-        TextView catLabelTv = sectionLabel("CATEGORY");
+        TextView catLabelTv = medium("Category", 14, ON_SURFACE);
         LinearLayout.LayoutParams clLp = wrap();
-        clLp.topMargin = dp(22); clLp.bottomMargin = dp(4);
+        clLp.topMargin = dp(22); clLp.bottomMargin = dp(8);
         catLabelTv.setLayoutParams(clLp);
         box.addView(catLabelTv);
 
-        final List<LinearLayout> catRows = new ArrayList<>();
-        for (String[] c : CATEGORIES) {
-            final String catId = c[0];
-            LinearLayout r = new LinearLayout(this);
-            r.setOrientation(LinearLayout.HORIZONTAL);
-            r.setGravity(Gravity.CENTER_VERTICAL);
-            r.setPadding(0, dp(9), 0, dp(9));
-            r.setTag(catId);
-            View dot = new View(this);
-            GradientDrawable dotBg = new GradientDrawable();
-            dotBg.setShape(GradientDrawable.OVAL);
-            dotBg.setColor(Color.parseColor(c[2]));
-            dot.setBackground(dotBg);
-            LinearLayout.LayoutParams dotLp = new LinearLayout.LayoutParams(dp(8), dp(8));
-            dotLp.rightMargin = dp(12);
-            dot.setLayoutParams(dotLp);
-            r.addView(dot);
-            TextView lbl = tv(c[1], 15.5f, W70);
-            lbl.setLayoutParams(wrapW(1));
-            r.addView(lbl);
-            TextView mark = tv("", 15, W);
-            mark.setTag("mark");
-            r.addView(mark);
-            r.setOnClickListener(v -> { selCat[0] = catId; restyleCatRows(catRows, selCat[0]); });
-            catRows.add(r);
-            box.addView(r);
+        /* Filter chips, three per row. */
+        final List<TextView> chips = new ArrayList<>();
+        LinearLayout chipRow = null;
+        for (int i = 0; i < CATEGORIES.length; i++) {
+            if (i % 3 == 0) {
+                chipRow = new LinearLayout(this);
+                chipRow.setOrientation(LinearLayout.HORIZONTAL);
+                LinearLayout.LayoutParams crLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                crLp.bottomMargin = dp(8);
+                chipRow.setLayoutParams(crLp);
+                box.addView(chipRow);
+            }
+            final String catId = CATEGORIES[i][0];
+            TextView chip = tv(CATEGORIES[i][1], 14, ON_SURFACE);
+            chip.setTag(catId);
+            chip.setPadding(dp(12), dp(7), dp(12), dp(7));
+            LinearLayout.LayoutParams chipLp = wrap();
+            chipLp.rightMargin = dp(8);
+            chip.setLayoutParams(chipLp);
+            chip.setOnClickListener(v -> { selCat[0] = catId; restyleChips(chips, selCat[0]); });
+            chips.add(chip);
+            chipRow.addView(chip);
         }
 
         final Runnable restyleSeg = () -> {
-            styleTypeOption(doOpt, selType[0].equals("do"));
-            styleTypeOption(avoidOpt, selType[0].equals("avoid"));
+            styleSegment(doOpt, selType[0].equals("do"), "Do it");
+            styleSegment(avoidOpt, selType[0].equals("avoid"), "Don't do it");
         };
         doOpt.setOnClickListener(v -> { selType[0] = "do"; restyleSeg.run(); });
         avoidOpt.setOnClickListener(v -> { selType[0] = "avoid"; restyleSeg.run(); });
         restyleSeg.run();
-        restyleCatRows(catRows, selCat[0]);
+        restyleChips(chips, selCat[0]);
 
         AlertDialog dialog = new AlertDialog.Builder(this)
             .setView(box)
@@ -674,7 +734,7 @@ public class MainActivity extends Activity {
             .setPositiveButton("Add habit", null)
             .create();
         dialog.setOnShowListener(d -> {
-            styleDialog(dialog);
+            styleDialog(dialog, false);
             dialog.getButton(DialogInterface.BUTTON_POSITIVE).setOnClickListener(v -> {
                 String n = name.getText().toString().trim();
                 if (n.isEmpty()) {
@@ -694,40 +754,35 @@ public class MainActivity extends Activity {
         dialog.show();
     }
 
-    private LinearLayout typeOption(String text) {
-        LinearLayout opt = new LinearLayout(this);
-        opt.setOrientation(LinearLayout.VERTICAL);
-        opt.setGravity(Gravity.CENTER_HORIZONTAL);
-        opt.setLayoutParams(wrapW(1));
-        opt.setPadding(0, dp(6), 0, 0);
-        TextView t = tv(text, 15.5f, W55);
-        t.setTag("label");
-        opt.addView(t);
-        View bar = new View(this);
-        bar.setTag("bar");
-        LinearLayout.LayoutParams barLp = new LinearLayout.LayoutParams(dp(30), dp(2));
-        barLp.topMargin = dp(7);
-        bar.setLayoutParams(barLp);
-        opt.addView(bar);
-        return opt;
+    private TextView segment(String text) {
+        TextView t = tv(text, 14, ON_SURFACE);
+        t.setGravity(Gravity.CENTER);
+        t.setPadding(dp(10), dp(9), dp(10), dp(9));
+        t.setLayoutParams(wrapW(1));
+        return t;
     }
 
-    private void styleTypeOption(LinearLayout opt, boolean selected) {
-        TextView t = (TextView) opt.findViewWithTag("label");
-        View bar = opt.findViewWithTag("bar");
-        t.setTextColor(selected ? W : W55);
-        t.setTypeface(selected ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
-        bar.setBackgroundColor(selected ? W : Color.TRANSPARENT);
+    private void styleSegment(TextView seg, boolean selected, String label) {
+        seg.setText(selected ? "✓  " + label : label);
+        seg.setTextColor(selected ? ON_SECONDARY_CONTAINER : ON_SURFACE);
+        seg.setTypeface(selected
+            ? Typeface.create("sans-serif-medium", Typeface.NORMAL) : Typeface.DEFAULT);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setShape(GradientDrawable.RECTANGLE);
+        bg.setCornerRadius(dp(20));
+        bg.setColor(selected ? SECONDARY_CONTAINER : 0x00000000);
+        seg.setBackground(bg);
     }
 
-    private void restyleCatRows(List<LinearLayout> rows, String selected) {
-        for (LinearLayout r : rows) {
-            boolean on = selected.equals(r.getTag());
-            TextView lbl = (TextView) r.getChildAt(1);
-            TextView mark = (TextView) r.findViewWithTag("mark");
-            lbl.setTextColor(on ? W : W70);
-            lbl.setTypeface(on ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
-            mark.setText(on ? "✓" : "");
+    private void restyleChips(List<TextView> chips, String selected) {
+        for (TextView chip : chips) {
+            boolean on = selected.equals(chip.getTag());
+            String label = catLabel((String) chip.getTag());
+            chip.setText(on ? "✓  " + label : label);
+            chip.setTextColor(on ? ON_SECONDARY_CONTAINER : ON_SURFACE);
+            GradientDrawable bg = rounded(on ? SECONDARY_CONTAINER : 0x00000000, 16);
+            bg.setStroke(dp(1), on ? SECONDARY_CONTAINER : OUTLINE_VAR);
+            chip.setBackground(bg);
         }
     }
 }

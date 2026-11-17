@@ -1,6 +1,10 @@
 # Build outputs
 build/
 
+# Robolectric test run outputs and extracted AAR fixtures
+robolectric/target/
+robolectric/libs/
+
 # Signing material — NEVER commit. The keystore is the app's identity:
 # whoever holds it can sign updates as this app.
 signing/

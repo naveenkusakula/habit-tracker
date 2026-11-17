@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  UI tests for Streaks, run with Robolectric: the real MainActivity runs
+  on the JVM (simulated Android), so tests can tap real buttons, fill the
+  real dialog and read the real SharedPreferences — no emulator needed.
+
+  These are TEST-ONLY tools. Nothing here is in the app or the APK; the
+  app itself still has zero dependencies.
+
+  Run:  mvn -q test        (first run downloads JUnit + Robolectric)
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>local.streaks</groupId>
+  <artifactId>streaks-ui-tests</artifactId>
+  <version>1.0</version>
+
+  <properties>
+    <maven.compiler.source>17</maven.compiler.source>
+    <maven.compiler.target>17</maven.compiler.target>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <robolectric.version>4.15.1</robolectric.version>
+    <android.jar>${env.HOME}/android-tools/sdk/platforms/android-35/android.jar</android.jar>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.google.android</groupId>
+      <artifactId>android</artifactId>
+      <version>35</version>
+      <scope>system</scope>
+      <systemPath>${android.jar}</systemPath>
+    </dependency>
+    <!-- AndroidX .aar dependencies can't be loaded by a plain JVM, so
+         their extracted classes.jar files ride along as system-scope
+         jars (generated into libs/ by the test setup — see README). -->
+    <dependency>
+      <groupId>local.androidx</groupId>
+      <artifactId>monitor-classes</artifactId>
+      <version>1.7.2</version>
+      <scope>system</scope>
+      <systemPath>${project.basedir}/libs/monitor-classes.jar</systemPath>
+    </dependency>
+    <dependency>
+      <groupId>local.androidx</groupId>
+      <artifactId>espresso-classes</artifactId>
+      <version>3.6.1</version>
+      <scope>system</scope>
+      <systemPath>${project.basedir}/libs/espresso-classes.jar</systemPath>
+    </dependency>
+    <dependency>
+      <groupId>junit</groupId>
+      <artifactId>junit</artifactId>
+      <version>4.13.2</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.robolectric</groupId>
+      <artifactId>robolectric</artifactId>
+      <version>${robolectric.version}</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <!-- compile the real app sources straight from ../src -->
+    <sourceDirectory>../src</sourceDirectory>
+    <testSourceDirectory>src/test/java</testSourceDirectory>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.2.5</version>
+        <configuration>
+          <!-- Robolectric resolves its android-all runtime from the local
+               Maven repo under user.home; pin it to the real home. -->
+          <argLine>-Duser.home=${env.HOME}</argLine>
+          <!-- AndroidX .aar dependencies can't be loaded by a plain JVM;
+               their extracted classes.jar files (from the AARs above) are
+               generated into libs/ by the test setup — see README. -->
+          <additionalClasspath>
+            <additionalClasspathElement>${project.basedir}/libs/monitor-classes.jar</additionalClasspathElement>
+            <additionalClasspathElement>${project.basedir}/libs/espresso-classes.jar</additionalClasspathElement>
+          </additionalClasspath>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>

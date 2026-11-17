@@ -1,8 +1,9 @@
 # Streaks — Daily Habit Tracker
 
-A simple daily habit tracker in the Gradient Weather style: a living gradient
-background, frosted-glass cards, big light numerals and pill chips. Free, no
-account, no server — it runs entirely in your browser and works offline.
+A simple daily habit tracker in native Material Design 3 style — the way
+Google's own apps look: light surface, white cards, Google-blue primary.
+Free, no account, no server — it runs entirely on your device and works
+offline.
 
 ## The idea
 
@@ -35,13 +36,15 @@ devices, and clearing the browser's site data clears your habits.
 
 ## Design
 
-Modelled on the Gradient Weather apps: one full-screen sky gradient, a
-giant hairline hero number (today's % done) with a weather-style
-"condition" line ("Mostly done", "All clear"), a This Week strip like an
-hourly forecast, and habit rows floating on the gradient with hairline
-dividers. No cards. When every do-habit is done, the sky cross-fades to a
-warm "clear day" gradient. The web version above and the Android app share
-this design and the same habit rules.
+Material Design 3, light theme: a hero card with a progress ring (today's
+% done) and a short status line ("Mostly done", "All clear"), a This Week
+strip inside the same card, habit rows in white cards with Material check
+circles, an extended FAB to add habits, and a Material dialog with a
+segmented Do / Don't control and category chips. The web version above and
+the Android app share this design and the same habit rules. (Earlier
+versions used a Gradient Weather look; v1.2 replaced it and fixed a bug
+that had silently disabled the Don't-do "Broke it" button — see the UI
+tests under `android/robolectric/`.)
 
 ## Android app
 

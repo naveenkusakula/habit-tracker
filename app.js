@@ -174,6 +174,7 @@ function render() {
   /* hero */
   els.heroNum.textContent = total === 0 ? "–" : String(percent(done, total));
   els.heroPct.textContent = total === 0 ? "" : "%";
+  document.documentElement.style.setProperty("--pct", total === 0 ? 0 : percent(done, total));
   els.cond.textContent = conditionText(done, total);
   els.sub.textContent = total === 0
     ? "Add a habit to start your day"
@@ -193,7 +194,7 @@ function render() {
       const alpha = tracked === 0 ? 0 : 0.27 + frac * 0.73;
       html += `<div class="wcell${i === 0 ? " today" : ""}">
         <div class="wletter">${letters[d.getDay()]}</div>
-        <div class="wdot" style="background:rgba(255,255,255,${alpha.toFixed(2)});border-color:rgba(255,255,255,${tracked === 0 ? 0.3 : 0})"></div>
+        <div class="wdot" style="background:rgba(11,87,208,${alpha.toFixed(2)});border:1px solid rgba(116,119,117,${tracked === 0 ? 1 : 0})"></div>
         <div class="wpct">${tracked === 0 ? "–" : Math.round(frac * 100) + "%"}</div>
       </div>`;
     }
