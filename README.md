@@ -33,6 +33,20 @@ Habits are stored in your browser's `localStorage` on the device you use —
 nothing is uploaded anywhere. That also means data doesn't sync between
 devices, and clearing the browser's site data clears your habits.
 
+## Android app
+
+`android/` contains a native Android version with the same look and rules,
+built for privacy:
+
+- **No permissions at all** — the manifest declares none, so Android itself
+  blocks the app from any network access. Nothing can be sent anywhere.
+- **Zero third-party dependencies** — Android framework only, no WebView.
+- Data lives in app-private storage; backups and device transfer are
+  disabled in the manifest.
+- Build it with `android/build.sh` (JDK 17 + Android SDK build-tools, no
+  Gradle). The signing keystore is **not** in this repo — it stays local,
+  because whoever holds it can sign updates as this app.
+
 ## Tech
 
 Plain HTML, CSS and JavaScript. No build step, no dependencies, no tracking.

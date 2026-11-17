@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Streaks — security posture, enforced by this manifest:
+  * NO <uses-permission> elements at all. Without the INTERNET permission the
+    operating system itself makes it impossible for this app to open a network
+    connection. No storage, location, contacts or any other permission either.
+  * allowBackup=false and dataExtractionRules exclude every domain, so habit
+    data is never copied to cloud backup or to another device by the platform.
+  * The only component is the launcher activity. Nothing is exported except
+    that entry point, there are no providers, receivers, services or deep
+    links, and there is no WebView anywhere in the app.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.naveenkusakula.streaks"
+    android:versionCode="1"
+    android:versionName="1.0">
+
+    <uses-sdk
+        android:minSdkVersion="26"
+        android:targetSdkVersion="35" />
+
+    <application
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="false"
+        android:icon="@drawable/ic_launcher"
+        android:label="Streaks"
+        android:theme="@android:style/Theme.Material.NoActionBar"
+        android:usesCleartextTraffic="false">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

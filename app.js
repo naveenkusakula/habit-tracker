@@ -34,13 +34,47 @@ function addDays(s, n) { return fmt(new Date(parse(s).getTime() + n * DAY)); }
 function diffDays(a, b) { return Math.round((parse(a) - parse(b)) / DAY); }
 
 /* ---------- state ---------- */
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+function isDateStr(s) {
+  if (typeof s !== "string" || !DATE_RE.test(s)) return false;
+  const d = parse(s);
+  return !isNaN(d.getTime()) && fmt(d) === s;
+}
+/* Stored data is never trusted: every field is validated and rebuilt, so a
+   corrupted or tampered entry is dropped or repaired instead of breaking
+   the app or smuggling unexpected values into the page. */
+function sanitizeHabit(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  if (raw.type !== "do" && raw.type !== "avoid") return null;
+  if (typeof raw.name !== "string" || !raw.name.trim()) return null;
+  const completions = {};
+  if (raw.completions && typeof raw.completions === "object" && !Array.isArray(raw.completions)) {
+    for (const k of Object.keys(raw.completions)) {
+      if (isDateStr(k) && raw.completions[k] === true) completions[k] = true;
+    }
+  }
+  const breaks = Array.isArray(raw.breaks)
+    ? [...new Set(raw.breaks.filter(isDateStr))].sort()
+    : [];
+  return {
+    id: typeof raw.id === "string" && raw.id ? raw.id : uid(),
+    name: raw.name.trim().slice(0, 60),
+    type: raw.type,
+    category: CATEGORIES.some((c) => c.id === raw.category) ? raw.category : "other",
+    createdAt: isDateStr(raw.createdAt) ? raw.createdAt : todayStr(),
+    completions,
+    breaks,
+  };
+}
 let state = load();
 function load() {
   try {
     const raw = localStorage.getItem(LS_KEY);
     if (raw) {
       const data = JSON.parse(raw);
-      if (data && Array.isArray(data.habits)) return data;
+      if (data && Array.isArray(data.habits)) {
+        return { habits: data.habits.map(sanitizeHabit).filter(Boolean) };
+      }
     }
   } catch (e) { /* corrupted storage falls through to a fresh start */ }
   return { habits: [] };
